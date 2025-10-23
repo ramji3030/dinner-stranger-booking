@@ -1,0 +1,159 @@
+# Free Tier Optimized Docker Compose Configuration
+# Perfect for Render.com, Railway.app, or local development
+# Estimated monthly cost: $0 (using free tiers)
+
+version: '3.8'
+
+services:
+  # Single Application Server (instead of 10 replicas)
+  app:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Use MongoDB Atlas Free Tier (512MB)
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/dinnerapp}
+      # Use Upstash Redis Free Tier (10k commands/day)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - JWT_SECRET=${JWT_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+    depends_on:
+      - mongo
+      - redis
+    restart: unless-stopped
+    # Minimal resource limits for free tier
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+
+  # Single MongoDB Instance (Free tier: MongoDB Atlas M0)
+  # For production, use MongoDB Atlas free tier instead
+  mongo:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=dinnerapp
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    # Note: For free tier, replace this with MongoDB Atlas connection string
+
+  # Single Redis Instance (Free tier: Upstash Redis)
+  # For production, use Upstash Redis free tier instead
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 50mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+
+  # Optional: Client (React app) - can also deploy to Vercel/Netlify free
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:3000
+    depends_on:
+      - app
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  mongo-data:
+    driver: local
+  redis-data:
+    driver: local
+
+# FREE TIER DEPLOYMENT OPTIONS:
+#
+# 1. **Render.com Free Tier**:
+#    - Web Service: 750 hours/month free
+#    - PostgreSQL: 90 days free (or use MongoDB Atlas)
+#    - Deploy backend + frontend separately
+#    - Automatically sleeps after 15 mins inactivity
+#
+# 2. **Railway.app Free Tier**:
+#    - $5 credit/month
+#    - Perfect for small apps
+#    - Easy deployment from GitHub
+#
+# 3. **MongoDB Atlas Free Tier**:
+#    - 512MB storage
+#    - Shared cluster
+#    - Replace mongo service with connection string:
+#      MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/dinnerapp
+#
+# 4. **Upstash Redis Free Tier**:
+#    - 10,000 commands per day
+#    - Replace redis service with connection string:
+#      REDIS_URL=redis://default:password@upstash-redis-url
+#
+# 5. **Vercel (Frontend Only)**:
+#    - Deploy React app for free
+#    - Unlimited bandwidth
+#    - Automatic HTTPS
+#
+# 6. **Stripe Free Tier**:
+#    - No monthly fees
+#    - Pay only 2.9% + 30¢ per transaction
+#
+# USAGE:
+#
+# Local Development:
+#   docker-compose -f docker-compose.free-tier.yml up
+#
+# Production (with external services):
+#   1. Sign up for MongoDB Atlas (free M0 cluster)
+#   2. Sign up for Upstash Redis (free tier)
+#   3. Set environment variables:
+#      MONGODB_URI=your_atlas_connection_string
+#      REDIS_URL=your_upstash_redis_url
+#   4. Deploy app service only to Render/Railway
+#   5. Deploy client to Vercel/Netlify
+#
+# ESTIMATED RESOURCE USAGE:
+# - RAM: ~1GB total (vs 50GB+ in enterprise setup)
+# - CPU: ~1 core (vs 20+ cores in enterprise)
+# - Storage: ~1GB (vs 100GB+ in enterprise)
+# - Cost: $0/month (vs $27,300/month)
+#
+# PERFORMANCE EXPECTATIONS:
+# - Concurrent Users: ~100-500 (vs 1M+ in enterprise)
+# - Response Time: <1s (vs <200ms in enterprise)
+# - Throughput: ~50 req/s (vs 100,000 req/s in enterprise)
+# - Availability: 99% (vs 99.99% in enterprise)
+#
+# SCALABILITY PATH:
+# When you outgrow free tier, upgrade in this order:
+# 1. MongoDB Atlas M10 ($0.08/hr = ~$57/month)
+# 2. Upstash Pro ($10/month for 100k commands/day)
+# 3. Render Starter ($7/month per service)
+# 4. Add Redis caching layer
+# 5. Consider CloudFlare free tier for CDN
+# 6. Eventually migrate to full enterprise setup
