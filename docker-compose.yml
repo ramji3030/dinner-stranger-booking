@@ -1,0 +1,371 @@
+version: '3.8'
+
+services:
+  # Load Balancer
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/ssl:ro
+    depends_on:
+      - app-1
+      - app-2
+      - app-3
+    networks:
+      - frontend
+      - backend
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+
+  # Application Servers (Horizontally Scalable)
+  app-1: &app-service
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongo-primary:27017,mongo-secondary-1:27017,mongo-secondary-2:27017/dinnerapp?replicaSet=rs0
+      - REDIS_URL=redis://redis-cluster:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+    depends_on:
+      - mongo-primary
+      - redis-cluster
+    networks:
+      - backend
+    deploy:
+      replicas: 10
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+      restart_policy:
+        condition: on-failure
+
+  app-2:
+    <<: *app-service
+
+  app-3:
+    <<: *app-service
+
+  # Redis Cluster for Caching & Sessions
+  redis-cluster:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - backend
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+
+  # MongoDB Primary (Write Operations)
+  mongo-primary:
+    image: mongo:6.0
+    command: mongod --replSet rs0 --bind_ip_all
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+      - MONGO_INITDB_DATABASE=dinnerapp
+    volumes:
+      - mongo-primary-data:/data/db
+      - ./mongodb/init-replica-set.js:/docker-entrypoint-initdb.d/init-replica-set.js:ro
+    ports:
+      - "27017:27017"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '1.0'
+        reservations:
+          memory: 2G
+          cpus: '0.5'
+      restart_policy:
+        condition: on-failure
+
+  # MongoDB Secondary Replicas (Read Operations)
+  mongo-secondary-1:
+    image: mongo:6.0
+    command: mongod --replSet rs0 --bind_ip_all
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo-secondary-1-data:/data/db
+    ports:
+      - "27018:27017"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '1.0'
+        reservations:
+          memory: 2G
+          cpus: '0.5'
+      restart_policy:
+        condition: on-failure
+
+  mongo-secondary-2:
+    image: mongo:6.0
+    command: mongod --replSet rs0 --bind_ip_all
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo-secondary-2-data:/data/db
+    ports:
+      - "27019:27017"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '1.0'
+        reservations:
+          memory: 2G
+          cpus: '0.5'
+      restart_policy:
+        condition: on-failure
+
+  # Elasticsearch Cluster for Search
+  elasticsearch-1: &elasticsearch-service
+    image: elasticsearch:8.8.0
+    environment:
+      - node.name=elasticsearch-1
+      - cluster.name=dinner-search
+      - discovery.seed_hosts=elasticsearch-2,elasticsearch-3
+      - cluster.initial_master_nodes=elasticsearch-1,elasticsearch-2,elasticsearch-3
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - xpack.security.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-1-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+  elasticsearch-2:
+    <<: *elasticsearch-service
+    environment:
+      - node.name=elasticsearch-2
+      - cluster.name=dinner-search
+      - discovery.seed_hosts=elasticsearch-1,elasticsearch-3
+      - cluster.initial_master_nodes=elasticsearch-1,elasticsearch-2,elasticsearch-3
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - xpack.security.enabled=false
+    volumes:
+      - elasticsearch-2-data:/usr/share/elasticsearch/data
+    ports:
+      - "9201:9200"
+
+  elasticsearch-3:
+    <<: *elasticsearch-service
+    environment:
+      - node.name=elasticsearch-3
+      - cluster.name=dinner-search
+      - discovery.seed_hosts=elasticsearch-1,elasticsearch-2
+      - cluster.initial_master_nodes=elasticsearch-1,elasticsearch-2,elasticsearch-3
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - xpack.security.enabled=false
+    volumes:
+      - elasticsearch-3-data:/usr/share/elasticsearch/data
+    ports:
+      - "9202:9200"
+
+  # Message Queue Workers
+  queue-worker-email:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.worker
+    environment:
+      - NODE_ENV=production
+      - WORKER_TYPE=email
+      - MONGODB_URI=mongodb://mongo-primary:27017,mongo-secondary-1:27017,mongo-secondary-2:27017/dinnerapp?replicaSet=rs0
+      - REDIS_URL=redis://redis-cluster:6379
+    depends_on:
+      - mongo-primary
+      - redis-cluster
+    networks:
+      - backend
+    deploy:
+      replicas: 5
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+      restart_policy:
+        condition: on-failure
+
+  queue-worker-payment:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.worker
+    environment:
+      - NODE_ENV=production
+      - WORKER_TYPE=payment
+      - MONGODB_URI=mongodb://mongo-primary:27017,mongo-secondary-1:27017,mongo-secondary-2:27017/dinnerapp?replicaSet=rs0
+      - REDIS_URL=redis://redis-cluster:6379
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+    depends_on:
+      - mongo-primary
+      - redis-cluster
+    networks:
+      - backend
+    deploy:
+      replicas: 10
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+      restart_policy:
+        condition: on-failure
+
+  queue-worker-matching:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.worker
+    environment:
+      - NODE_ENV=production
+      - WORKER_TYPE=matching
+      - MONGODB_URI=mongodb://mongo-primary:27017,mongo-secondary-1:27017,mongo-secondary-2:27017/dinnerapp?replicaSet=rs0
+      - REDIS_URL=redis://redis-cluster:6379
+    depends_on:
+      - mongo-primary
+      - redis-cluster
+      - elasticsearch-1
+    networks:
+      - backend
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+      restart_policy:
+        condition: on-failure
+
+  # Monitoring & Observability
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+networks:
+  frontend:
+    driver: overlay
+    attachable: true
+  backend:
+    driver: overlay
+    attachable: true
+
+volumes:
+  mongo-primary-data:
+    driver: local
+  mongo-secondary-1-data:
+    driver: local
+  mongo-secondary-2-data:
+    driver: local
+  redis-data:
+    driver: local
+  elasticsearch-1-data:
+    driver: local
+  elasticsearch-2-data:
+    driver: local
+  elasticsearch-3-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
