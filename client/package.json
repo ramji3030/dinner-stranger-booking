@@ -23,7 +23,7 @@
     "react-hook-form": "^7.48.2",
     "@hookform/resolvers": "^3.3.2",
     "yup": "^1.4.0",
-    "@vite-pwa/vite-plugin": "^0.17.4"
+    "vite-plugin-pwa": "^0.17.4"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
