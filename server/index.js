@@ -55,6 +55,8 @@ const userRoutes = require('./routes/users');
 const paymentRoutes = require('./routes/payments');
 const eventRoutes = require('./routes/events');
 const quizRoutes = require('./routes/quiz');
+const chatbotRoutes = require('./routes/chatbot.routes');
+const voiceRoutes = require('./routes/voice.routes');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -63,6 +65,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/quiz', quizRoutes);
+app.use('/api/chatbot', chatbotRoutes);
+app.use('/api/voice', voiceRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
